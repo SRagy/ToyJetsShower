@@ -9,6 +9,7 @@ from showerSim.simulator import Simulator
 from showerSim.utils import get_logger
 import os
 
+import pyprob
 
 logger = get_logger()
 
@@ -235,3 +236,14 @@ class PyroSimulator(Simulator):
         # print('param_names_unsorted = ', param_names_unsorted)
 
         return param_names_sorted + param_names_unsorted
+
+
+class PyprobSimulator(Simulator):
+    """ Pyro simulator interface """
+
+    def forward(self, inputs):
+        raise NotImplementedError
+
+    def trace(self, inputs):
+        # self.forward will be implemented when we create a simulator that inherits from PyprobSimulator. And PyprobSimulator inherits from Simulator where the __call__ method returns self.forward (as in PyTorch)
+        return self.get_trace(inputs)

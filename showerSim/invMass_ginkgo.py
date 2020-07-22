@@ -9,15 +9,17 @@ import pickle
 import torch
 from torch import nn
 import pyro
-from showerSim.pyro_simulator import PyroSimulator
+from showerSim.pyro_simulator import PyroSimulator, PyprobSimulator
 from showerSim.utils import get_logger
 from showerSim import likelihood_invM as likelihood
 from showerSim import auxFunctions
 
+import pyprob
+
 logger = get_logger()
 
 
-class Simulator(PyroSimulator):
+class Simulator(PyprobSimulator):
     def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, num_samples=1, minLeaves =2 , maxLeaves=np.inf, maxNTry=20000 ):
         super(Simulator, self).__init__()
 
@@ -41,10 +43,10 @@ class Simulator(PyroSimulator):
 
         """Define pyro distributions as global variables"""
         """Sample a unit vector uniformly over the 2-sphere"""
-        globals()["multiNormal_dist"] = pyro.distributions.MultivariateNormal(torch.zeros(3), torch.eye(3))
+        #globals()["multiNormal_dist"] = pyro.distributions.MultivariateNormal(torch.zeros(3), torch.eye(3))
 
-        globals()["root_dist"] = pyro.distributions.Exponential(root_rate)
-        globals()["decay_dist"] = pyro.distributions.Exponential(decay_rate)
+        globals()["root_dist"] = pyprob.distributions.Exponential(root_rate)
+        globals()["decay_dist"] = pyprob.distributions.Exponential(decay_rate)
 
 
         jet_list = []
@@ -224,9 +226,13 @@ def _traverse_rec(
     if delta_P > cut_off:
 
         """ Sample uniformly over the sphere of unit radius a unit vector for the decay products in the CM frame"""
-        r_CM = pyro.sample("rCM"+ str(idx) + str(is_left), multiNormal_dist)
-        r_CM = r_CM.numpy()
-        r_CM = r_CM / np.linalg.norm(r_CM)
+        phi_CM = pyprob.sample(pyprob.distributions.Uniform(0, 2 * np.pi), name="phiCM" + str(idx) + str(is_left)).item()
+        theta_CM_U = pyprob.sample(pyprob.distributions.Uniform(0, 1), name="thetaCM_U" + str(idx) + str(is_left))
+        theta_CM = np.arccos(1 - 2 * theta_CM_U).item()
+        r_CM = np.array([np.sin(theta_CM)*np.cos(phi_CM), np.sin(theta_CM)*np.sin(phi_CM), np.cos(theta_CM)])
+        #r_CM = pyro.sample("rCM"+ str(idx) + str(is_left), multiNormal_dist)
+        #r_CM = r_CM.numpy()
+        #r_CM = r_CM / np.linalg.norm(r_CM)
 
 
         """  Use different distributions to model the root node splitting, e.g. W decay"""
@@ -246,14 +252,14 @@ def _traverse_rec(
 
         """ The invariant mass squared should decrease strictly"""
         while draw_decay_L >= (1. - 1e-3):
-            draw_decay_L = pyro.sample(
-                "L_decay" + str(idx) + str(is_left), sampling_dist
+            draw_decay_L = pyprob.sample(sampling_dist,
+                "L_decay" + str(idx) + str(is_left)
             )  # We draw a number to get the left child delta
             nL+=1
 
         while draw_decay_R >= (1. - 1e-3):
-            draw_decay_R = pyro.sample(
-                "R_decay" + str(idx) + str(is_left), sampling_dist
+            draw_decay_R = pyprob.sample(sampling_dist,
+                "R_decay" + str(idx) + str(is_left)
             )  # We draw a number to get the right child delta
             nR+=1
 
@@ -367,6 +373,64 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
     return p_mu
 
 
+class SimulatorModel(PyprobSimulator):
+    def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, num_samples=1, minLeaves =2 , maxLeaves=np.inf, maxNTry=20000 ):
+        super(SimulatorModel, self).__init__()
 
+        self.pt_cut = pt_cut
+        self.M_hard = M_hard
+        self.Delta_0 = Delta_0
+        self.num_samples = num_samples
+        self.minLeaves = minLeaves
+        self.maxLeaves = maxLeaves
+        self.maxNTry = maxNTry
 
+        self.jet_p = jet_p
 
+    def forward(self, inputs=None):
+
+        if inputs is None:
+            raise Exception("Need to pass two rates in a pytorch tensor as input")
+        root_rate = inputs[0]
+        decay_rate = inputs[1]
+
+        logger.info(f"Num samples: {self.num_samples}")
+        logger.info(f"Initial squared mass: {self.Delta_0}")
+
+        """Define pyro distributions as global variables"""
+
+        globals()["root_dist"] = pyprob.distributions.Exponential(root_rate)
+        globals()["decay_dist"] = pyprob.distributions.Exponential(decay_rate)
+
+        
+        tree, content, deltas, draws, leaves = _traverse(
+            self.jet_p,
+            delta_P=self.Delta_0,
+            cut_off=self.pt_cut,
+            rate=decay_rate,
+        )
+
+        jet = dict()
+        jet["root_id"] = 0
+        jet["tree"] = np.asarray(tree).reshape(-1, 2)  # Labels for the nodes in the tree
+        jet["content"] = np.array([np.asarray(c) for c in content])
+        jet["LambdaRoot"] = root_rate
+        jet["Lambda"] = decay_rate
+        jet["Delta_0"] = self.Delta_0
+        jet["pt_cut"] = self.pt_cut
+        jet["algorithm"] = "truth"
+        jet["deltas"] = np.asarray(deltas)
+        jet["draws"] = np.asarray(draws)
+        jet["leaves"] = np.array([np.asarray(c) for c in leaves])
+        if self.M_hard:
+            jet["M_Hard"] = float(self.M_hard)
+
+        num_leaves_dist = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
+        pyprob.observe(num_leaves_dist, name='num_leaves')
+        return jet
+
+    @staticmethod
+    def save(jet_list, outdir, filename):
+        out_filename = os.path.join(outdir, filename + ".pkl")
+        with open(out_filename, "wb") as f:
+            pickle.dump(jet_list, f, protocol=2)

@@ -1,4 +1,6 @@
-class Simulator:
+import pyprob
+
+class Simulator(pyprob.Model):
     """ Abstract simulator interface. """
 
     def forward(self, inputs):
