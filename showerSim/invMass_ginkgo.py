@@ -19,7 +19,7 @@ import pyprob
 logger = get_logger()
 
 
-class Simulator(PyprobSimulator):
+class Simulator(PyroSimulator):
     def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, num_samples=1, minLeaves =2 , maxLeaves=np.inf, maxNTry=20000 ):
         super(Simulator, self).__init__()
 
