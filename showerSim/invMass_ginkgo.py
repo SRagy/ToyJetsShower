@@ -374,17 +374,14 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
 
 
 class SimulatorModel(PyprobSimulator):
-    def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, num_samples=1, minLeaves =2 , maxLeaves=np.inf, maxNTry=20000 ):
+    def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None):
         super(SimulatorModel, self).__init__()
 
         self.pt_cut = pt_cut
         self.M_hard = M_hard
         self.Delta_0 = Delta_0
-        self.num_samples = num_samples
         self.minLeaves = minLeaves
         self.maxLeaves = maxLeaves
-        self.maxNTry = maxNTry
-
         self.jet_p = jet_p
 
     def forward(self, inputs=None):
@@ -394,7 +391,6 @@ class SimulatorModel(PyprobSimulator):
         root_rate = inputs[0]
         decay_rate = inputs[1]
 
-        logger.info(f"Num samples: {self.num_samples}")
         logger.info(f"Initial squared mass: {self.Delta_0}")
 
         """Define pyro distributions as global variables"""
@@ -425,8 +421,20 @@ class SimulatorModel(PyprobSimulator):
         if self.M_hard:
             jet["M_Hard"] = float(self.M_hard)
 
-        num_leaves_dist = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
-        pyprob.observe(num_leaves_dist, name='num_leaves')
+        num_leaves_cts = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
+        pyprob.observe(num_leaves_cts, name='num_leaves_cts')
+        if self.minLeaves is not None:
+            delta_val = int(len(jet["leaves"]) >= self.minLeaves)
+            minLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+            pyprob.observe(minLeaves_disc, name='min_leaves_disc')
+        if self.maxLeaves is not None:
+            delta_val = int(len(jet["leaves"]) <= self.maxLeaves)
+            maxLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+            pyprob.observe(maxLeaves_disc, name='max_leaves_disc')
+        if self.minLeaves is not None and self.maxLeaves is not None:
+            delta_val = int(self.minLeaves <= len(jet["leaves"]) <= self.maxLeaves)
+            rangeLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+            pyprob.observe(rangeLeaves_disc, name='range_leaves_disc')
         return jet
 
     @staticmethod
