@@ -132,7 +132,7 @@ def dir2D(phi):
     return torch.tensor([np.sin(phi), np.cos(phi)])
 
 
-def _traverse(root, delta_P=None, cut_off=None, rate=None):
+def _traverse(root, delta_P=None, cut_off=None, rate=None, suppress_output=False):
 
     """
     This function call the recursive function _traverse_rec to make the trees starting from the root
@@ -175,6 +175,7 @@ def _traverse(root, delta_P=None, cut_off=None, rate=None):
         delta_P=delta_P,
         cut_off=cut_off,
         rate=rate,
+        suppress_output=suppress_output
     )
 
     return tree, content, deltas, draws, leaves
@@ -193,6 +194,7 @@ def _traverse_rec(
     drew=None,
     cut_off=None,
     rate=None,
+    suppress_output=False
 ):
 
     """
@@ -262,7 +264,7 @@ def _traverse_rec(
                 "R_decay" + str(idx) + str(is_left)
             )  # We draw a number to get the right child delta
             nR+=1
-
+            
         logger.debug(f"draw_decay_L After= {draw_decay_L, nL}")
         logger.debug(f"draw_decay_R After = {draw_decay_R, nR}")
 
@@ -270,7 +272,7 @@ def _traverse_rec(
         tL = t0 * draw_decay_L
         tR = (np.sqrt(t0) - np.sqrt(tL))**2 * draw_decay_R
 
-        if idx ==0: logger.info(f" Off-shell subjets mass = {np.sqrt(tL),np.sqrt(tR)}")
+        if idx ==0 and suppress_output is False: logger.info(f" Off-shell subjets mass = {np.sqrt(tL),np.sqrt(tR)}")
 
 
         """ 2-Body decay in the parent CM frame"""
@@ -309,6 +311,7 @@ def _traverse_rec(
             cut_off=cut_off,
             rate=rate,
             drew=draw_decay_L,
+            suppress_output=suppress_output
         )
 
         _traverse_rec(
@@ -324,6 +327,7 @@ def _traverse_rec(
             cut_off=cut_off,
             rate=rate,
             drew=draw_decay_R,
+            suppress_output=suppress_output
         )
 
 
@@ -374,29 +378,43 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
 
 
 class SimulatorModel(PyprobSimulator):
-    def __init__(self, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None):
+    def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None, bool_func=None,
+                suppress_output=False):
         super(SimulatorModel, self).__init__()
 
+        self.rate = rate
         self.pt_cut = pt_cut
         self.M_hard = M_hard
         self.Delta_0 = Delta_0
         self.minLeaves = minLeaves
         self.maxLeaves = maxLeaves
         self.jet_p = jet_p
+        self.bernoulli_func = bool_func  # give an arbitrary function which receives inputs (self, jet) and outputs True or False
+        self.suppress_output = suppress_output
+        
+        
+    def __call__(self, inputs=None, **kwargs):
+        if inputs is not None:
+            return self.forward(inputs=inputs, **kwargs)
+        return self.forward(**kwargs)
 
+        
     def forward(self, inputs=None):
+        if inputs is not None:
+            rate = inputs
+            #raise Exception("Need to pass two rates in a pytorch tensor as input")
+        else:
+            rate = torch.tensor(self.rate)
+        root_rate = rate[0]
+        decay_rate = rate[1]
 
-        if inputs is None:
-            raise Exception("Need to pass two rates in a pytorch tensor as input")
-        root_rate = inputs[0]
-        decay_rate = inputs[1]
-
-        logger.info(f"Initial squared mass: {self.Delta_0}")
+        if self.suppress_output is False:
+            logger.info(f"Initial squared mass: {self.Delta_0}")
 
         """Define pyro distributions as global variables"""
 
-        globals()["root_dist"] = pyprob.distributions.Exponential(root_rate)
-        globals()["decay_dist"] = pyprob.distributions.Exponential(decay_rate)
+        globals()["root_dist"] = pyprob.distributions.TruncatedExponential(root_rate, 0, 1)
+        globals()["decay_dist"] = pyprob.distributions.TruncatedExponential(decay_rate, 0, 1)
 
         
         tree, content, deltas, draws, leaves = _traverse(
@@ -404,6 +422,7 @@ class SimulatorModel(PyprobSimulator):
             delta_P=self.Delta_0,
             cut_off=self.pt_cut,
             rate=decay_rate,
+            suppress_output=self.suppress_output
         )
 
         jet = dict()
@@ -435,6 +454,10 @@ class SimulatorModel(PyprobSimulator):
             delta_val = int(self.minLeaves <= len(jet["leaves"]) <= self.maxLeaves)
             rangeLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
             pyprob.observe(rangeLeaves_disc, name='range_leaves_disc')
+        if self.bernoulli_func is not None:
+            delta_val = int(self.bernoulli_func(self, jet))
+            bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
+            pyprob.observe(bool_func_dist, name="bool_func")
         return jet
 
     @staticmethod
