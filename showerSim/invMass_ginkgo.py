@@ -377,6 +377,9 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
     return p_mu
 
 
+## PyProb Version of Ginkgo Simulator
+
+
 class SimulatorModel(PyprobSimulator):
     def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None, bool_func=None,
                 suppress_output=False):
