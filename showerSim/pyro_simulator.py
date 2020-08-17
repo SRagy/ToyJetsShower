@@ -216,7 +216,7 @@ class PyroSimulator(Simulator):
 
             # print("Params = ", params)
 
-            # We yield (keep track of the last state) the distribution, node values (probaility at each step) and parameters of the distribution
+            # We yield (keep track of the last state) the distribution, node values (probability at each step) and parameters of the distribution
             yield dist, z, params
 
     # -------------------------------
@@ -239,11 +239,37 @@ class PyroSimulator(Simulator):
 
 
 class PyprobSimulator(Simulator):
-    """ Pyro simulator interface """
+    """ PyProb simulator interface """
 
     def forward(self, inputs):
         raise NotImplementedError
+        
 
     def trace(self, inputs):
         # self.forward will be implemented when we create a simulator that inherits from PyprobSimulator. And PyprobSimulator inherits from Simulator where the __call__ method returns self.forward (as in PyTorch)
-        return self.get_trace(inputs)
+        return self.get_trace(inputs=inputs)
+    
+    
+    def augmented_data(self, inputs):
+        if inputs.dim() == 1:
+            trace = self.trace(inputs)
+            # I've verified that trace.log_prob is the sum of the log_prob for each latent variable sampled
+            trace.log_prob.retain_grad()
+            trace.log_prob.backward()
+            joint_score = inputs.grad
+
+            rval = trace.result
+            rval["joint_score"] = joint_score
+            return rval
+        elif inputs.dim() == 2:
+            results = []
+            for row in inputs:
+                trace = self.trace(row)
+                trace.log_prob.retain_grad()
+                trace.log_prob.backward()
+                joint_score = inputs.grad
+
+                rval = trace.result
+                rval["joint_score"] = joint_score
+                results.append(rval)
+            return results
