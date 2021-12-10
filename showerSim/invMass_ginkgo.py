@@ -8,6 +8,7 @@ import copy
 import pickle
 import torch
 from torch import nn
+from geomloss import SamplesLoss
 import pyro
 from showerSim.pyro_simulator import PyroSimulator, PyprobSimulator
 from showerSim.utils import get_logger
@@ -32,6 +33,7 @@ class Simulator(PyroSimulator):
         self.maxNTry = maxNTry
 
         self.jet_p = jet_p
+
 
     def forward(self, inputs):
 
@@ -379,7 +381,7 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
 
 class SimulatorModel(PyprobSimulator):
     def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None, bool_func=None,
-                suppress_output=False):
+                 suppress_output=False, obs_leaves=None):
         super(SimulatorModel, self).__init__()
 
         self.rate = rate
@@ -391,6 +393,8 @@ class SimulatorModel(PyprobSimulator):
         self.jet_p = jet_p
         self.bernoulli_func = bool_func  # give an arbitrary function which receives inputs (self, jet) and outputs True or False
         self.suppress_output = suppress_output
+        self.obs_leaves = obs_leaves
+        self.sinkhorn = SamplesLoss(loss="sinkhorn", p=2, blur=.05) # TO DO: CHECK THESE VALUES!
         
         
     def __call__(self, inputs=None, **kwargs):
@@ -458,6 +462,11 @@ class SimulatorModel(PyprobSimulator):
             delta_val = int(self.bernoulli_func(self, jet))
             bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
             pyprob.observe(bool_func_dist, name="bool_func")
+        if self.obs_leaves is not None:
+            sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
+            dummy = pyprob.distributions.Normal(0., 1.)
+            pyprob.observe(dummy, sinkhorn_dist, name="distance")
+
         return jet
 
     @staticmethod
