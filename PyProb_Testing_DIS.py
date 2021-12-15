@@ -107,8 +107,8 @@ simulator = SimulatorModelDIS(rate=[3, 1.5], # exponential dsitribution rate
                               pt_cut=10.,  # minimum pT for resulting jet
                               Delta_0=torch.tensor(jetM**2),  # parent particle mass squared -> needs tensor
                               M_hard=jetM,  # parent particle mass
-                              minLeaves=30,  # minimum number of jet constituents
-                              maxLeaves=40,  # maximum " "
+                              minLeaves=0,  # minimum number of jet constituents
+                              maxLeaves=1000,  # maximum number of jet constituents (a large value to stop expensive simulator runs)
                               bool_func=dummy_bernoulli,
                               suppress_output=True,
                               obs_leaves=obs_leaves)
@@ -118,8 +118,8 @@ jet = simulator()  # Make sure the forward pass works
 # Generate traces for the prior distribution
 
 simulator.train(
-    importance_sample_size=100, #SMALL SIZE FOR TESTING!
+    importance_sample_size=1000, # Small size for testing!
     proposal_mixture_components=3,
-    observe_embeddings={'bool_func': {'dim': 1, 'depth': 1}}
+    observe_embeddings={'bool_func': {'dim': 1, 'depth': 1}} # Dummy value as we currently have to observe something
 
 ) 

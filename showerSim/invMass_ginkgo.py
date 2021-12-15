@@ -9,6 +9,7 @@ import pickle
 import torch
 from torch import nn
 from geomloss import SamplesLoss
+from warnings import warn
 import pyro
 from showerSim.pyro_simulator import PyroSimulator, PyprobSimulator
 from showerSim.utils import get_logger
@@ -394,7 +395,7 @@ class SimulatorModel(PyprobSimulator):
         self.bernoulli_func = bool_func  # give an arbitrary function which receives inputs (self, jet) and outputs True or False
         self.suppress_output = suppress_output
         self.obs_leaves = obs_leaves
-        self.sinkhorn = SamplesLoss(loss="sinkhorn", p=2, blur=.05) # TO DO: CHECK THESE VALUES!
+        self.sinkhorn = SamplesLoss(loss="sinkhorn", p=1, blur=.05) # TO DO: CHECK THESE TUNING VALUES!
         
         
     def __call__(self, inputs=None, **kwargs):
@@ -463,8 +464,12 @@ class SimulatorModel(PyprobSimulator):
             bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
             pyprob.observe(bool_func_dist, name="bool_func")
         if self.obs_leaves is not None:
-            sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
-            dummy = pyprob.distributions.Normal(0., 1.)
+            if torch.isnan(self.obs_leaves).any():
+                warn("nan detected in obs_leaves, returning distance of 1e6")
+                sinkhorn_dist = 1e6
+            else:
+                sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
+            dummy = pyprob.distributions.Normal(sinkhorn_dist, 0.1)
             pyprob.observe(dummy, sinkhorn_dist, name="distance")
 
         return jet
