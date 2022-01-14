@@ -97,13 +97,22 @@ def subjet_pT_cut(self, jet):
     #return (275 <= subjet_left_pT <= 400) or (275 <= subjet_right_pT <= 400)
     return (subjet_left_pT <= 40) and (270 <= subjet_right_pT)
 
-# Make instance of the simulator
-
+# Define simulator class. Inherits from:
+#  1) ModelDIS - modifies Model to allow DIS training
+#  2) SimulatorModel - contains the actual simulation code
 class SimulatorModelDIS(invMass_ginkgo.SimulatorModel, ModelDIS):
-    pass
+    def forward(self, inputs=None):
+        assert inputs is None # Modify code if this ever not met?
+        # Sample parameter of interest from Unif(0,10) prior
+        decay_rate = pyprob.sample(pyprob.distributions.Uniform(0., 10.),
+                                   name="decay_rate_parameter")
+        # Simulator code needs two decay rates for (1) root note (2) all others
+        # For now both are set to the same value
+        inputs = [decay_rate, decay_rate]
+        super().forward(inputs)
 
-simulator = SimulatorModelDIS(rate=[3, 1.5], # exponential dsitribution rate
-                              jet_p=jet4vec,  # parent particle 4-vector
+# Make instance of the simulator
+simulator = SimulatorModelDIS(jet_p=jet4vec,  # parent particle 4-vector
                               pt_cut=10.,  # minimum pT for resulting jet
                               Delta_0=torch.tensor(jetM**2),  # parent particle mass squared -> needs tensor
                               M_hard=jetM,  # parent particle mass
@@ -121,5 +130,4 @@ simulator.train(
     importance_sample_size=1000, # Small size for testing!
     proposal_mixture_components=3,
     observe_embeddings={'bool_func': {'dim': 1, 'depth': 1}} # Dummy value as we currently have to observe something
-
 ) 
