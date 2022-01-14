@@ -118,8 +118,9 @@ jet = simulator()  # Make sure the forward pass works
 # Generate traces for the prior distribution
 
 simulator.train(
-    importance_sample_size=1000, # Small size for testing!
+    importance_sample_size=5000, # Small size for testing!
     proposal_mixture_components=3,
     observe_embeddings={'bool_func': {'dim': 1, 'depth': 1}} # Dummy value as we currently have to observe something
-
 ) 
+
+simulator.save_inference_network('Ginkgo_inference_network')
