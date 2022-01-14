@@ -464,8 +464,8 @@ class SimulatorModel(PyprobSimulator):
             bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
             pyprob.observe(bool_func_dist, name="bool_func")
         if self.obs_leaves is not None:
-            if torch.isnan(self.obs_leaves).any():
-                warn("nan detected in obs_leaves, returning distance of 1e6")
+            if torch.isnan(torch.tensor(jet["leaves"])).any():
+                warn("nan detected in simulated leaves, returning distance of 1e6")
                 sinkhorn_dist = 1e6
             else:
                 sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
