@@ -104,7 +104,7 @@ class SimulatorModelDIS(invMass_ginkgo.SimulatorModel, ModelDIS):
     def forward(self, inputs=None):
         assert inputs is None # Modify code if this ever not met?
         # Sample parameter of interest from Unif(0,10) prior
-        decay_rate = pyprob.sample(pyprob.distributions.Uniform(0., 10.),
+        decay_rate = pyprob.sample(pyprob.distributions.Uniform(1e-3, 10.),
                                    name="decay_rate_parameter")
         # Simulator code needs two decay rates for (1) root note (2) all others
         # For now both are set to the same value
