@@ -240,6 +240,8 @@ class PyroSimulator(Simulator):
 
 class PyprobSimulator(Simulator):
     """ Pyro simulator interface """
+    # def __init__(**kwargs):
+    #     super.__init__(kwargs)
 
     def forward(self, inputs):
         raise NotImplementedError

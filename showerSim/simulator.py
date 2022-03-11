@@ -2,6 +2,8 @@ import pyprob
 
 class Simulator(pyprob.Model):
     """ Abstract simulator interface. """
+    # def __init__(**kwargs):
+    #     super().__init__(kwargs)
 
     def forward(self, inputs):
         raise NotImplementedError()

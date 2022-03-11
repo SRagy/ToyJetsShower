@@ -15,6 +15,7 @@ from showerSim.pyro_simulator import PyroSimulator, PyprobSimulator
 from showerSim.utils import get_logger
 from showerSim import likelihood_invM as likelihood
 from showerSim import auxFunctions
+from pyprob.distributions.delta import Delta
 
 import pyprob
 
@@ -226,6 +227,8 @@ def _traverse_rec(
     else:
         deltas.append(0)
         leaves.append(root)
+        dist = Delta(root)
+        pyprob.observe(dist, root, name = 'leaf_{}'.format(idx))
 
 
     if delta_P > cut_off:
@@ -381,20 +384,18 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
 
 
 class SimulatorModel(PyprobSimulator):
-    def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None, bool_func=None,
-                 suppress_output=False, obs_leaves=None):
-        super(SimulatorModel, self).__init__()
-
+    def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None,
+                 suppress_output=False, obs_leaves=None, **kwargs):
+        super(SimulatorModel, self).__init__(**kwargs)
         self.rate = rate
         self.pt_cut = pt_cut
         self.M_hard = M_hard
         self.Delta_0 = Delta_0
         self.minLeaves = minLeaves
         self.maxLeaves = maxLeaves
-        self.jet_p = jet_p
-        self.bernoulli_func = bool_func  # give an arbitrary function which receives inputs (self, jet) and outputs True or False
+        self.jet_p = jet_p 
         self.suppress_output = suppress_output
-        self.obs_leaves = obs_leaves
+        self.obs = obs_leaves
         self.sinkhorn = SamplesLoss(loss="sinkhorn", p=1, blur=.05) # TO DO: CHECK THESE TUNING VALUES!
         
         
@@ -445,32 +446,32 @@ class SimulatorModel(PyprobSimulator):
         if self.M_hard:
             jet["M_Hard"] = float(self.M_hard)
 
-        num_leaves_cts = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
-        pyprob.observe(num_leaves_cts, name='num_leaves_cts')
-        if self.minLeaves is not None:
-            delta_val = int(len(jet["leaves"]) >= self.minLeaves)
-            minLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
-            pyprob.observe(minLeaves_disc, name='min_leaves_disc')
-        if self.maxLeaves is not None:
-            delta_val = int(len(jet["leaves"]) <= self.maxLeaves)
-            maxLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
-            pyprob.observe(maxLeaves_disc, name='max_leaves_disc')
-        if self.minLeaves is not None and self.maxLeaves is not None:
-            delta_val = int(self.minLeaves <= len(jet["leaves"]) <= self.maxLeaves)
-            rangeLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
-            pyprob.observe(rangeLeaves_disc, name='range_leaves_disc')
-        if self.bernoulli_func is not None:
-            delta_val = int(self.bernoulli_func(self, jet))
-            bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
-            pyprob.observe(bool_func_dist, name="bool_func")
-        if self.obs_leaves is not None:
-            if torch.isnan(torch.tensor(jet["leaves"])).any():
-                warn("nan detected in simulated leaves, returning distance of 1e6")
-                sinkhorn_dist = 1e6
-            else:
-                sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
-            dummy = pyprob.distributions.Normal(sinkhorn_dist, 0.1)
-            pyprob.observe(dummy, sinkhorn_dist, name="distance")
+        # num_leaves_cts = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
+        # pyprob.observe(num_leaves_cts, name='num_leaves_cts')
+        # if self.minLeaves is not None:
+        #     delta_val = int(len(jet["leaves"]) >= self.minLeaves)
+        #     minLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(minLeaves_disc, name='min_leaves_disc')
+        # if self.maxLeaves is not None:
+        #     delta_val = int(len(jet["leaves"]) <= self.maxLeaves)
+        #     maxLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(maxLeaves_disc, name='max_leaves_disc')
+        # if self.minLeaves is not None and self.maxLeaves is not None:
+        #     delta_val = int(self.minLeaves <= len(jet["leaves"]) <= self.maxLeaves)
+        #     rangeLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(rangeLeaves_disc, name='range_leaves_disc')
+        # if self.bernoulli_func is not None:
+        #     delta_val = int(self.bernoulli_func(self, jet))
+        #     bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(bool_func_dist, name="bool_func")
+        # if self.obs_leaves is not None:
+        #     if torch.isnan(torch.tensor(jet["leaves"])).any():
+        #         warn("nan detected in simulated leaves, returning distance of 1e6")
+        #         sinkhorn_dist = 1e6
+        #     else:
+        #         sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
+        #     dummy = pyprob.distributions.Normal(sinkhorn_dist, 0.1)
+        #     pyprob.observe(dummy, sinkhorn_dist, name="distance")
 
         return jet
 
