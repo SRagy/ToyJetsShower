@@ -16,6 +16,7 @@ from showerSim.utils import get_logger
 from showerSim import likelihood_invM as likelihood
 from showerSim import auxFunctions
 from pyprob.distributions.delta import Delta
+from pyprob.util import to_tensor
 
 import pyprob
 
@@ -133,7 +134,7 @@ class Simulator(PyroSimulator):
 
 
 def dir2D(phi):
-    return torch.tensor([np.sin(phi), np.cos(phi)])
+    return to_tensor([np.sin(phi), np.cos(phi)])
 
 
 def _traverse(root, delta_P=None, cut_off=None, rate=None, suppress_output=False):
@@ -234,10 +235,10 @@ def _traverse_rec(
     if delta_P > cut_off:
 
         """ Sample uniformly over the sphere of unit radius a unit vector for the decay products in the CM frame"""
-        phi_CM = pyprob.sample(pyprob.distributions.Uniform(0, 2 * np.pi), name="phiCM" + str(idx) + str(is_left)).item()
+        phi_CM = pyprob.sample(pyprob.distributions.Uniform(0, 2 * np.pi), name="phiCM" + str(idx) + str(is_left))
         theta_CM_U = pyprob.sample(pyprob.distributions.Uniform(0, 1), name="thetaCM_U" + str(idx) + str(is_left))
-        theta_CM = np.arccos(1 - 2 * theta_CM_U).item()
-        r_CM = np.array([np.sin(theta_CM)*np.cos(phi_CM), np.sin(theta_CM)*np.sin(phi_CM), np.cos(theta_CM)])
+        theta_CM = torch.arccos(1 - 2 * theta_CM_U)
+        r_CM = to_tensor([torch.sin(theta_CM)*torch.cos(phi_CM), torch.sin(theta_CM)*torch.sin(phi_CM), torch.cos(theta_CM)])
         #r_CM = pyro.sample("rCM"+ str(idx) + str(is_left), multiNormal_dist)
         #r_CM = r_CM.numpy()
         #r_CM = r_CM / np.linalg.norm(r_CM)
@@ -270,13 +271,13 @@ def _traverse_rec(
                 "R_decay" + str(idx) + str(is_left)
             )  # We draw a number to get the right child delta
             nR+=1
-            
+
         logger.debug(f"draw_decay_L After= {draw_decay_L, nL}")
         logger.debug(f"draw_decay_R After = {draw_decay_R, nR}")
 
         t0 = delta_P
         tL = t0 * draw_decay_L
-        tR = (np.sqrt(t0) - np.sqrt(tL))**2 * draw_decay_R
+        tR = (torch.sqrt(t0) - torch.sqrt(tL))**2 * draw_decay_R
 
         if idx ==0 and suppress_output is False: logger.info(f" Off-shell subjets mass = {np.sqrt(tL),np.sqrt(tR)}")
 
@@ -290,18 +291,18 @@ def _traverse_rec(
 
 
         """Boost to the lab frame"""
-        P0_lab = np.linalg.norm(root[1::])
+        P0_lab = torch.linalg.norm(root[1::])
         n0= - root[1::]/P0_lab
         logger.debug(f" n0 = {n0}")
-        logger.debug(f"norm r_CM = {np.linalg.norm(r_CM)}")
+        logger.debug(f"norm r_CM = {torch.linalg.norm(r_CM)}")
 
         pL_mu = labEP(tp = t0, Ep_lab = root[0], Pp_lab = P0_lab, n = n0, Echild_CM = EL_cm, Pchild_CM = P_CM, p_versor = r_CM)
         pR_mu = labEP(tp = t0, Ep_lab = root[0], Pp_lab = P0_lab, n = n0, Echild_CM = ER_cm, Pchild_CM = P_CM, p_versor = - r_CM)
 
-        logger.debug(f" Off-shell subjets mass = {np.sqrt(tL), np.sqrt(tR)}")
-        logger.debug(f"pL inv mass from p^2 in lab  frame: {np.sqrt(pL_mu[0]**2-np.linalg.norm(pL_mu[1::])**2)}")
-        logger.debug(f"pR inv mass from p^2 in lab  frame: {np.sqrt(pR_mu[0] ** 2 - np.linalg.norm(pR_mu[1::]) ** 2)}")
-        logger.debug(f"----"*10)
+        # logger.debug(f" Off-shell subjets mass = {np.sqrt(tL), np.sqrt(tR)}")
+        # logger.debug(f"pL inv mass from p^2 in lab  frame: {np.sqrt(pL_mu[0]**2-np.linalg.norm(pL_mu[1::])**2)}")
+        # logger.debug(f"pR inv mass from p^2 in lab  frame: {np.sqrt(pR_mu[0] ** 2 - np.linalg.norm(pR_mu[1::]) ** 2)}")
+        # logger.debug(f"----"*10)
 
 
         _traverse_rec(
@@ -341,12 +342,12 @@ def _traverse_rec(
 ### Auxiliary functions:
 def CenterofMassE(tp = None,t_child = None,t_sib= None):
     """ Decay product energies in the parent CM frame"""
-    E = np.sqrt(tp)/2 * (1 + t_child/tp - t_sib/tp)
+    E = torch.sqrt(tp)/2 * (1 + t_child/tp - t_sib/tp)
     return E
 
 def CenterofMassP(tp= None, t_child= None, t_sib= None):
     """ Decay product spatial momentum in the parent CM frame"""
-    P = np.sqrt(tp)/2 * np.sqrt( 1 - 2 * (t_child+t_sib)/tp + (t_child - t_sib)**2 / tp**2 )
+    P = torch.sqrt(tp)/2 * torch.sqrt( 1 - 2 * (t_child+t_sib)/tp + (t_child - t_sib)**2 / tp**2 )
 
     return P
 
@@ -354,31 +355,31 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
     """ Boost to the lab frame"""
     logger.debug(f"{type(tp)}")
     logger.debug(f"{type(Ep_lab)}")
-    # tp = torch.tensor(tp)
-    # Ep_lab = torch.tensor(Ep_lab)
+    # tp = to_tensor(tp)
+    # Ep_lab = to_tensor(Ep_lab)
 
-    tp = tp.numpy()
-    Echild_CM = Echild_CM.numpy()
-    Pchild_CM = Pchild_CM.numpy()
+    tp = tp
+    Echild_CM = Echild_CM
+    Pchild_CM = Pchild_CM
 
-    Elab = Ep_lab/np.sqrt(tp)* Echild_CM - Pp_lab/np.sqrt(tp) * Pchild_CM * np.dot(n,p_versor)
+    Elab = Ep_lab/torch.sqrt(tp)* Echild_CM - Pp_lab/torch.sqrt(tp) * Pchild_CM * torch.dot(n,p_versor)
 
-    Plab = - Pp_lab/np.sqrt(tp) * Echild_CM * n + Pchild_CM * (p_versor + (Ep_lab/np.sqrt(tp) - 1) * np.dot(p_versor,n) * n)
+    Plab = - Pp_lab/torch.sqrt(tp) * Echild_CM * n + Pchild_CM * (p_versor + (Ep_lab/torch.sqrt(tp) - 1) * torch.dot(p_versor,n) * n)
 
-    if Elab < np.linalg.norm(Plab):
-        print("---" * 10)
-        logger.debug(f" Elab = {Elab}")
-        logger.debug(f" Plab = {np.linalg.norm(Plab)}")
-        logger.debug(f" sqrt(tp) = {np.sqrt(tp)}")
-        logger.debug(f" Ep_lab = {Ep_lab}")
-        logger.debug(f" Pp_lab = {Pp_lab}")
-        logger.debug(f" np.dot(n,p_versor) = {np.dot(n,p_versor)}")
-        logger.debug(f"Echild CM = {Echild_CM}")
-        logger.debug(f"Pchild_CM = {Pchild_CM}")
-        logger.debug(f" terms = {Pp_lab/np.sqrt(tp) * Echild_CM * n,+ Pchild_CM * (p_versor ),Pchild_CM * ( (Ep_lab/np.sqrt(tp) - 1) * np.dot(p_versor,n) * n) }")
-        logger.debug(f"---" * 10)
+    # if Elab < torchlinalg.norm(Plab):
+    #     print("---" * 10)
+    #     logger.debug(f" Elab = {Elab}")
+    #     logger.debug(f" Plab = {np.linalg.norm(Plab)}")
+    #     logger.debug(f" sqrt(tp) = {np.sqrt(tp)}")
+    #     logger.debug(f" Ep_lab = {Ep_lab}")
+    #     logger.debug(f" Pp_lab = {Pp_lab}")
+    #     logger.debug(f" np.dot(n,p_versor) = {np.dot(n,p_versor)}")
+    #     logger.debug(f"Echild CM = {Echild_CM}")
+    #     logger.debug(f"Pchild_CM = {Pchild_CM}")
+    #     logger.debug(f" terms = {Pp_lab/np.sqrt(tp) * Echild_CM * n,+ Pchild_CM * (p_versor ),Pchild_CM * ( (Ep_lab/np.sqrt(tp) - 1) * np.dot(p_versor,n) * n) }")
+    #     logger.debug(f"---" * 10)
 
-    p_mu = np.concatenate(([Elab],Plab))
+    p_mu = torch.cat([Elab.reshape(-1),Plab])
 
     return p_mu
 
@@ -393,24 +394,24 @@ class SimulatorModel(PyprobSimulator):
         self.Delta_0 = Delta_0
         self.minLeaves = minLeaves
         self.maxLeaves = maxLeaves
-        self.jet_p = jet_p 
+        self.jet_p = jet_p
         self.suppress_output = suppress_output
         self.obs = obs_leaves
         self.sinkhorn = SamplesLoss(loss="sinkhorn", p=1, blur=.05) # TO DO: CHECK THESE TUNING VALUES!
-        
-        
+
+
     def __call__(self, inputs=None, **kwargs):
         if inputs is not None:
             return self.forward(inputs=inputs, **kwargs)
         return self.forward(**kwargs)
 
-        
+
     def forward(self, inputs=None):
         if inputs is not None:
             rate = inputs
             #raise Exception("Need to pass two rates in a pytorch tensor as input")
         else:
-            rate = torch.tensor(self.rate)
+            rate = to_tensor(self.rate)
         root_rate = rate[0]
         decay_rate = rate[1]
 
@@ -422,7 +423,7 @@ class SimulatorModel(PyprobSimulator):
         globals()["root_dist"] = pyprob.distributions.TruncatedExponential(root_rate, 0, 1)
         globals()["decay_dist"] = pyprob.distributions.TruncatedExponential(decay_rate, 0, 1)
 
-        
+
         tree, content, deltas, draws, leaves = _traverse(
             self.jet_p,
             delta_P=self.Delta_0,
@@ -433,16 +434,16 @@ class SimulatorModel(PyprobSimulator):
 
         jet = dict()
         jet["root_id"] = 0
-        jet["tree"] = np.asarray(tree).reshape(-1, 2)  # Labels for the nodes in the tree
-        jet["content"] = np.array([np.asarray(c) for c in content])
+        jet["tree"] = to_tensor(tree).reshape(-1, 2)  # Labels for the nodes in the tree
+        jet["content"] = torch.stack(content)
         jet["LambdaRoot"] = root_rate
         jet["Lambda"] = decay_rate
         jet["Delta_0"] = self.Delta_0
         jet["pt_cut"] = self.pt_cut
         jet["algorithm"] = "truth"
-        jet["deltas"] = np.asarray(deltas)
-        jet["draws"] = np.asarray(draws)
-        jet["leaves"] = np.array([np.asarray(c) for c in leaves])
+        jet["deltas"] = to_tensor(deltas)
+        jet["draws"] = to_tensor(draws[1:])
+        jet["leaves"] = torch.stack(leaves)
         if self.M_hard:
             jet["M_Hard"] = float(self.M_hard)
 
@@ -465,11 +466,11 @@ class SimulatorModel(PyprobSimulator):
         #     bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
         #     pyprob.observe(bool_func_dist, name="bool_func")
         # if self.obs_leaves is not None:
-        #     if torch.isnan(torch.tensor(jet["leaves"])).any():
+        #     if torch.isnan(to_tensor(jet["leaves"])).any():
         #         warn("nan detected in simulated leaves, returning distance of 1e6")
         #         sinkhorn_dist = 1e6
         #     else:
-        #         sinkhorn_dist = self.sinkhorn(self.obs_leaves, torch.tensor(jet["leaves"]))
+        #         sinkhorn_dist = self.sinkhorn(self.obs_leaves, to_tensor(jet["leaves"]))
         #     dummy = pyprob.distributions.Normal(sinkhorn_dist, 0.1)
         #     pyprob.observe(dummy, sinkhorn_dist, name="distance")
 
