@@ -235,8 +235,8 @@ def _traverse_rec(
     if delta_P > cut_off:
 
         """ Sample uniformly over the sphere of unit radius a unit vector for the decay products in the CM frame"""
-        phi_CM = pyprob.sample(pyprob.distributions.Uniform(0, 2 * np.pi), name="phiCM" + str(idx) + str(is_left))
-        theta_CM_U = pyprob.sample(pyprob.distributions.Uniform(0, 1), name="thetaCM_U" + str(idx) + str(is_left))
+        phi_CM = pyprob.distributions.Uniform(0, 2 * np.pi).sample()
+        theta_CM_U = pyprob.distributions.Uniform(0, 1).sample()
         theta_CM = torch.arccos(1 - 2 * theta_CM_U)
         r_CM = to_tensor([torch.sin(theta_CM)*torch.cos(phi_CM), torch.sin(theta_CM)*torch.sin(phi_CM), torch.cos(theta_CM)])
         #r_CM = pyro.sample("rCM"+ str(idx) + str(is_left), multiNormal_dist)
@@ -261,15 +261,11 @@ def _traverse_rec(
 
         """ The invariant mass squared should decrease strictly"""
         while draw_decay_L >= (1. - 1e-3):
-            draw_decay_L = pyprob.sample(sampling_dist,
-                "L_decay" + str(idx) + str(is_left)
-            )  # We draw a number to get the left child delta
+            draw_decay_L = sampling_dist.sample() # We draw a number to get the left child delta
             nL+=1
 
         while draw_decay_R >= (1. - 1e-3):
-            draw_decay_R = pyprob.sample(sampling_dist,
-                "R_decay" + str(idx) + str(is_left)
-            )  # We draw a number to get the right child delta
+            draw_decay_R = sampling_dist.sample() # We draw a number to get the right child delta
             nR+=1
 
         logger.debug(f"draw_decay_L After= {draw_decay_L, nL}")
