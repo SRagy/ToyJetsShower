@@ -137,7 +137,7 @@ def dir2D(phi):
     return to_tensor([np.sin(phi), np.cos(phi)])
 
 
-def _traverse(root, delta_P=None, cut_off=None, rate=None, suppress_output=False):
+def _traverse(root, delta_P=None, cut_off=None, rate=None, suppress_output=False, control_root = False):
 
     """
     This function call the recursive function _traverse_rec to make the trees starting from the root
@@ -180,7 +180,8 @@ def _traverse(root, delta_P=None, cut_off=None, rate=None, suppress_output=False
         delta_P=delta_P,
         cut_off=cut_off,
         rate=rate,
-        suppress_output=suppress_output
+        suppress_output=suppress_output,
+        control_root=control_root
     )
 
     return tree, content, deltas, draws, leaves
@@ -199,7 +200,8 @@ def _traverse_rec(
     drew=None,
     cut_off=None,
     rate=None,
-    suppress_output=False
+    suppress_output=False,
+    control_root = False
 ):
 
     """
@@ -259,18 +261,25 @@ def _traverse_rec(
         logger.debug(f"draw_decay_L Before= {draw_decay_L, nL}")
         logger.debug(f"draw_decay_R Before = {draw_decay_R, nR}")
 
+        # control latent variables dictating root decay.
+        if idx==0 and control_root:
+            control = True
+        else:
+            control = False
+        
         """ The invariant mass squared should decrease strictly"""
         while draw_decay_L >= (1. - 1e-3):
+
             draw_decay_L = pyprob.sample(sampling_dist,
                 "L_decay" + str(idx) + str(is_left),
-                control=False
+                control=control
             )  # We draw a number to get the left child delta
             nL+=1
 
         while draw_decay_R >= (1. - 1e-3):
             draw_decay_R = pyprob.sample(sampling_dist,
                 "R_decay" + str(idx) + str(is_left),
-                control=False
+                control=control
             )  # We draw a number to get the right child delta
             nR+=1
         logger.debug(f"draw_decay_L After= {draw_decay_L, nL}")
@@ -319,7 +328,8 @@ def _traverse_rec(
             cut_off=cut_off,
             rate=rate,
             drew=draw_decay_L,
-            suppress_output=suppress_output
+            suppress_output=suppress_output,
+            control_root = control_root
         )
 
         _traverse_rec(
@@ -335,7 +345,8 @@ def _traverse_rec(
             cut_off=cut_off,
             rate=rate,
             drew=draw_decay_R,
-            suppress_output=suppress_output
+            suppress_output=suppress_output,
+            control_root = control_root
         )
 
 
@@ -387,7 +398,7 @@ def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild
 
 class SimulatorModel(PyprobSimulator):
     def __init__(self, rate=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None,
-                 suppress_output=False, obs_leaves=None, **kwargs):
+                 suppress_output=False, obs_leaves=None, control_root=False,**kwargs):
         super(SimulatorModel, self).__init__(**kwargs)
         self.rate = rate
         self.pt_cut = pt_cut
@@ -398,7 +409,7 @@ class SimulatorModel(PyprobSimulator):
         self.jet_p = jet_p
         self.suppress_output = suppress_output
         self.obs = obs_leaves
-        self.sinkhorn = SamplesLoss(loss="sinkhorn", p=1, blur=.05) # TO DO: CHECK THESE TUNING VALUES!
+        self.control_root = control_root
 
 
     def __call__(self, inputs=None, **kwargs):
@@ -430,7 +441,8 @@ class SimulatorModel(PyprobSimulator):
             delta_P=self.Delta_0,
             cut_off=self.pt_cut,
             rate=decay_rate,
-            suppress_output=self.suppress_output
+            suppress_output=self.suppress_output,
+            control_root=self.control_root
         )
 
         jet = dict()
