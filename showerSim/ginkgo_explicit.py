@@ -1,0 +1,551 @@
+#!/usr/bin/env python
+
+from typing import Counter
+import numpy as np
+import time
+import sys
+import os
+import copy
+import pickle
+import torch
+from torch import nn
+from geomloss import SamplesLoss
+from warnings import warn
+import pyro
+from showerSim.pyro_simulator import PyroSimulator, PyprobSimulator
+from showerSim.utils import get_logger
+from showerSim import likelihood_invM as likelihood
+from showerSim import auxFunctions
+from pyprob.distributions.delta import Delta
+from pyprob.util import to_tensor
+
+import pyprob
+
+logger = get_logger()
+
+
+class Simulator(PyroSimulator):
+    def __init__(self, control=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, num_samples=1, minLeaves =2 , maxLeaves=np.inf, maxNTry=20000 ):
+        super(Simulator, self).__init__()
+
+        self.pt_cut = pt_cut
+        self.M_hard = M_hard
+        self.Delta_0 = Delta_0
+        self.num_samples = num_samples
+        self.minLeaves = minLeaves
+        self.maxLeaves = maxLeaves
+        self.maxNTry = maxNTry
+        self.jet_p = jet_p
+
+        if control:
+            assert control in ('all', 'splittings'), "control must be set to one of None, 'all or 'splittings'"
+            self.control = control
+
+
+    def forward(self, inputs):
+
+        self.node_counter=0 # Reset for each realisation of the tree.
+        root_rate = inputs[0]
+        decay_rate = inputs[1]
+
+        if self.control == 'all':
+            assert (len(inputs)-2)%4==0, "when controlling all, input length must be a 2 + a multiple of 4"
+        elif self.control == 'splittings':
+            assert inputs%2==0, "when controlling splittings, input length must be a multiple of 2"
+
+        logger.info(f"Num samples: {self.num_samples}")
+        logger.info(f"Initial squared mass: {self.Delta_0}")
+
+        """Define pyro distributions as global variables"""
+        """Sample a unit vector uniformly over the 2-sphere"""
+        #globals()["multiNormal_dist"] = pyro.distributions.MultivariateNormal(torch.zeros(3), torch.eye(3))
+
+        globals()["root_dist"] = pyprob.distributions.Exponential(root_rate)
+        globals()["decay_dist"] = pyprob.distributions.Exponential(decay_rate)
+
+
+        jet_list = []
+        # for i in range(self.num_samples):
+        i=0
+        while len(jet_list)< self.num_samples and i<self.maxNTry:
+
+            tree, content, deltas, draws, leaves = _traverse(
+                self.jet_p,
+                inputs[2:],
+                delta_P=self.Delta_0,
+                cut_off=self.pt_cut,
+                rate=decay_rate,
+            )
+
+            jet = dict()
+            jet["root_id"] = 0
+            jet["tree"] = np.asarray(tree).reshape(-1, 2)  # Labels for the nodes in the tree
+            jet["content"] = np.array([np.asarray(c) for c in content])
+            jet["LambdaRoot"] = root_rate
+            jet["Lambda"] = decay_rate
+            jet["Delta_0"] = self.Delta_0
+            jet["pt_cut"] = self.pt_cut
+            jet["algorithm"] = "truth"
+            jet["deltas"] = np.asarray(deltas)
+            jet["draws"] = np.asarray(draws)
+            jet["leaves"] = np.array([np.asarray(c) for c in leaves])
+
+            if self.minLeaves <= len(jet["leaves"]) < self.maxLeaves:
+
+                if self.M_hard:
+                    jet["M_Hard"] = float(self.M_hard)
+
+                """Fill jet dictionaries with log likelihood of truth jet"""
+                likelihood.enrich_jet_logLH(jet, dij=True)
+
+                """ Angular quantities"""
+                ConstPhi, PhiDelta, PhiDeltaListRel = auxFunctions.traversePhi(jet, jet["root_id"], [], [],[])
+                jet["ConstPhi"] = ConstPhi
+                jet["PhiDelta"] = PhiDelta
+                jet["PhiDeltaRel"] = PhiDeltaListRel
+
+
+
+                jet_list.append(jet)
+
+                print(" N const = ", len(jet['leaves']))
+
+                if len(jet_list) % 1000 == 0:
+                    print("Generated ", len(jet_list), "jets with ", self.minLeaves, "<=number of leaves<", self.maxLeaves)
+
+
+                logger.info(f" Leaves  = {jet['leaves']}")
+                logger.info(f" N const = {len(jet['leaves'])}")
+                logger.debug(f"Tree: {jet['tree']}")
+                logger.debug(f"Content: {jet['content']}")
+                logger.info(f" Total momentum from root = {jet['content'][0]}")
+                logger.info(f" Total momentum from leaves = {np.sum(jet['leaves'],axis=0)}")
+                logger.info(f" Jet Mass = {jet['M_Hard']}")
+                logger.info(f" Jet likelihood = {jet['logLH']}")
+
+
+                logger.debug(f"Tree: {jet['tree']}")
+                logger.debug(f"Content: {jet['content']}")
+                logger.debug(f"Deltas: {jet['deltas']}")
+                logger.debug(f"Draws: {jet['draws']}")
+                logger.debug(f"Leaves: {jet['leaves']}")
+
+            i += 1
+            if i%1000==0:
+                print("Generated ",i," jets")
+
+
+        return jet_list
+
+    @staticmethod
+    def save(jet_list, outdir, filename):
+        out_filename = os.path.join(outdir, filename + ".pkl")
+        with open(out_filename, "wb") as f:
+            pickle.dump(jet_list, f, protocol=2)
+
+
+def dir2D(phi):
+    return to_tensor([np.sin(phi), np.cos(phi)])
+
+
+def _traverse(self, root, inputs, delta_P=None, cut_off=None, rate=None, suppress_output=False):
+
+    """
+    This function call the recursive function _traverse_rec to make the trees starting from the root
+
+    Inputs
+    root: numpy array representing the initial jet momentum
+    delta_P: Initial value for the parent mass squared
+    cut_off: Min value of the mass squared below which evolution stops
+    rate: parametrizes the exponential distribution
+    M_hard: value for the mass of the jet (root of the binary tree)
+
+    Outputs
+    content: a list of numpy array representing the momenta flowing
+        through every possible edge of the tree. content[0] is the root momentum
+    tree: an array of integers >= -1, such that
+        content[tree[2 * i]] and content[tree[2 * i + 1]] represent the momenta
+        associated repsectively to the left and right child of content[i].
+        If content[i] is a leaf, tree[2 * i] == tree[2 * i + 1] == -1
+    deltas: mass squared value associated to content[i]
+    draws: r value  associated to content[i]
+    """
+
+    tree = []
+    content = []
+    deltas = []
+    draws = []
+
+    leaves = []
+
+    """ Start from the root=jet 4-vector"""
+    _traverse_rec(self,
+        root,
+        inputs,
+        -1,
+        False,
+        tree,
+        content,
+        deltas,
+        draws,
+        leaves,
+        delta_P=delta_P,
+        cut_off=cut_off,
+        rate=rate,
+        suppress_output=suppress_output
+    )
+
+    return tree, content, deltas, draws, leaves
+
+
+def _traverse_rec(self,
+    root,
+    inputs,
+    parent_idx,
+    is_left,
+    tree,
+    content,
+    deltas,
+    draws,
+    leaves,
+    delta_P=None,
+    drew=None,
+    cut_off=None,
+    rate=None,
+    suppress_output=False
+):
+
+    """
+    Recursive function to make the jet tree.
+    """
+
+    idx = len(tree) // 2
+    if self.control == 'all':
+        start_index = 4*self.node_counter # Should we use 4*idx? This will expend inputs even when node is leaf and not splitting occurs. 
+    elif self.control == 'splittings':
+        start_index = 2*self.node_counter
+
+    
+    if parent_idx >= 0:
+        if is_left:
+            tree[2 * parent_idx] = idx
+        else:
+            tree[2 * parent_idx + 1] = idx
+
+    """Insert 2 new nodes to the vector that constitutes the tree. 
+    In the next iteration we will replace this 2 values with the location of the parent of the new nodes"""
+    tree.append(-1)
+    tree.append(-1)
+
+    """Fill the content vector with the values of the node"""
+    content.append(root)
+
+    draws.append(drew)
+
+    if delta_P > cut_off:
+        deltas.append(delta_P)
+    else:
+        deltas.append(0)
+        leaves.append(root)
+        dist = Delta(root)
+        pyprob.observe(dist, root, name = 'leaf_{}'.format(idx))
+
+
+    if delta_P > cut_off:
+
+        """ Sample uniformly over the sphere of unit radius a unit vector for the decay products in the CM frame"""
+        # start_index vs node_counter
+        self.node_counter+=1
+
+        if self.control == 'all' and start_index < len(inputs): #len(inputs) - 1?
+            phi_CM = inputs[start_index + 0]
+            theta_CM_U = inputs[start_index + 1]
+        else:
+            phi_CM = 2*np.pi*pyprob.sample(pyprob.distributions.Uniform(0, 1), name="phiCM" + str(idx) + str(is_left))
+            theta_CM_U = pyprob.sample(pyprob.distributions.Uniform(0, 1), name="thetaCM_U" + str(idx) + str(is_left))
+        theta_CM = torch.arccos(1 - 2 * theta_CM_U)
+        r_CM = to_tensor([torch.sin(theta_CM)*torch.cos(phi_CM), torch.sin(theta_CM)*torch.sin(phi_CM), torch.cos(theta_CM)])
+        #r_CM = pyro.sample("rCM"+ str(idx) + str(is_left), multiNormal_dist)
+        #r_CM = r_CM.numpy()
+        #r_CM = r_CM / np.linalg.norm(r_CM)
+
+
+        """  Use different distributions to model the root node splitting, e.g. W decay"""
+        if idx == 0:  sampling_dist = root_dist
+        else: sampling_dist = decay_dist
+
+        logger.debug(f" dist = {sampling_dist}")
+
+
+        """ Sample new values for the children invariant mass squared"""
+        draw_decay_L = np.inf
+        draw_decay_R = np.inf
+        nL=0
+        nR=0
+        logger.debug(f"draw_decay_L Before= {draw_decay_L, nL}")
+        logger.debug(f"draw_decay_R Before = {draw_decay_R, nR}")
+
+        """ The invariant mass squared should decrease strictly"""
+        if start_index < len(inputs): # If inputs remain to be consumed.
+
+            if self.control == 'all':
+                draw_decay_L = inputs[start_index + 2]
+                draw_decay_R = inputs[start_index + 3]
+            elif self.control == 'splittings':
+                draw_decay_L = inputs[start_index]
+                draw_decay_R = inputs[start_index + 1]
+
+            if draw_decay_L >= 1 or draw_decay_R >= 1: #invalid simulation
+                print('draw_decay parameter >= 1, simulation invalid')
+                nan_tensor = torch.tensor([torch.nan]*4)
+                content.append(nan_tensor)
+                leaves.append(nan_tensor)
+                deltas.append(0)
+                draws.append(torch.nan)
+                return
+        else:
+            while draw_decay_L >= (1. - 1e-3):
+                draw_decay_L = pyprob.sample(sampling_dist,
+                    "L_decay" + str(idx) + str(is_left)
+                )  # We draw a number to get the left child delta
+                nL+=1
+
+            while draw_decay_R >= (1. - 1e-3):
+                draw_decay_R = pyprob.sample(sampling_dist,
+                    "R_decay" + str(idx) + str(is_left)
+                )  # We draw a number to get the right child delta
+                nR+=1
+
+        logger.debug(f"draw_decay_L After= {draw_decay_L, nL}")
+        logger.debug(f"draw_decay_R After = {draw_decay_R, nR}")
+
+        t0 = delta_P
+        tL = t0 * draw_decay_L
+        tR = (torch.sqrt(t0) - torch.sqrt(tL))**2 * draw_decay_R
+
+        if idx ==0 and suppress_output is False: logger.info(f" Off-shell subjets mass = {np.sqrt(tL),np.sqrt(tR)}")
+
+
+        """ 2-Body decay in the parent CM frame"""
+        EL_cm = CenterofMassE(tp = t0, t_child = tL, t_sib = tR)
+        ER_cm = CenterofMassE(tp = t0, t_child = tR, t_sib = tL)
+
+        P_CM = CenterofMassP(tp = t0, t_child = tR, t_sib = tL)
+        logger.debug(f"P_CM =  {P_CM}")
+
+
+        """Boost to the lab frame"""
+        P0_lab = torch.linalg.norm(root[1::])
+        n0= - root[1::]/P0_lab
+        logger.debug(f" n0 = {n0}")
+        logger.debug(f"norm r_CM = {torch.linalg.norm(r_CM)}")
+
+        pL_mu = labEP(tp = t0, Ep_lab = root[0], Pp_lab = P0_lab, n = n0, Echild_CM = EL_cm, Pchild_CM = P_CM, p_versor = r_CM)
+        pR_mu = labEP(tp = t0, Ep_lab = root[0], Pp_lab = P0_lab, n = n0, Echild_CM = ER_cm, Pchild_CM = P_CM, p_versor = - r_CM)
+
+        # logger.debug(f" Off-shell subjets mass = {np.sqrt(tL), np.sqrt(tR)}")
+        # logger.debug(f"pL inv mass from p^2 in lab  frame: {np.sqrt(pL_mu[0]**2-np.linalg.norm(pL_mu[1::])**2)}")
+        # logger.debug(f"pR inv mass from p^2 in lab  frame: {np.sqrt(pR_mu[0] ** 2 - np.linalg.norm(pR_mu[1::]) ** 2)}")
+        # logger.debug(f"----"*10)
+
+
+        _traverse_rec(self,
+            pL_mu,
+            inputs,
+            idx,
+            True,
+            tree,
+            content,
+            deltas,
+            draws,
+            leaves,
+            delta_P=tL,
+            cut_off=cut_off,
+            rate=rate,
+            drew=draw_decay_L,
+            suppress_output=suppress_output
+        )
+
+        _traverse_rec(self,
+            pR_mu,
+            inputs,
+            idx,
+            False,
+            tree,
+            content,
+            deltas,
+            draws,
+            leaves,
+            delta_P=tR,
+            cut_off=cut_off,
+            rate=rate,
+            drew=draw_decay_R,
+            suppress_output=suppress_output
+        )
+
+
+
+### Auxiliary functions:
+def CenterofMassE(tp = None,t_child = None,t_sib= None):
+    """ Decay product energies in the parent CM frame"""
+    E = torch.sqrt(tp)/2 * (1 + t_child/tp - t_sib/tp)
+    return E
+
+def CenterofMassP(tp= None, t_child= None, t_sib= None):
+    """ Decay product spatial momentum in the parent CM frame"""
+    P = torch.sqrt(tp)/2 * torch.sqrt( 1 - 2 * (t_child+t_sib)/tp + (t_child - t_sib)**2 / tp**2 )
+
+    return P
+
+def labEP(tp= None,Ep_lab= None, Pp_lab= None , n= None, Echild_CM= None, Pchild_CM= None, p_versor= None):
+    """ Boost to the lab frame"""
+    logger.debug(f"{type(tp)}")
+    logger.debug(f"{type(Ep_lab)}")
+    # tp = to_tensor(tp)
+    # Ep_lab = to_tensor(Ep_lab)
+
+    tp = tp
+    Echild_CM = Echild_CM
+    Pchild_CM = Pchild_CM
+
+    Elab = Ep_lab/torch.sqrt(tp)* Echild_CM - Pp_lab/torch.sqrt(tp) * Pchild_CM * torch.dot(n,p_versor)
+
+    Plab = - Pp_lab/torch.sqrt(tp) * Echild_CM * n + Pchild_CM * (p_versor + (Ep_lab/torch.sqrt(tp) - 1) * torch.dot(p_versor,n) * n)
+
+    # if Elab < torchlinalg.norm(Plab):
+    #     print("---" * 10)
+    #     logger.debug(f" Elab = {Elab}")
+    #     logger.debug(f" Plab = {np.linalg.norm(Plab)}")
+    #     logger.debug(f" sqrt(tp) = {np.sqrt(tp)}")
+    #     logger.debug(f" Ep_lab = {Ep_lab}")
+    #     logger.debug(f" Pp_lab = {Pp_lab}")
+    #     logger.debug(f" np.dot(n,p_versor) = {np.dot(n,p_versor)}")
+    #     logger.debug(f"Echild CM = {Echild_CM}")
+    #     logger.debug(f"Pchild_CM = {Pchild_CM}")
+    #     logger.debug(f" terms = {Pp_lab/np.sqrt(tp) * Echild_CM * n,+ Pchild_CM * (p_versor ),Pchild_CM * ( (Ep_lab/np.sqrt(tp) - 1) * np.dot(p_versor,n) * n) }")
+    #     logger.debug(f"---" * 10)
+
+    p_mu = torch.cat([Elab.reshape(-1),Plab])
+
+    return p_mu
+
+
+class SimulatorModel(PyprobSimulator):
+    def __init__(self, control=None, jet_p=None, pt_cut=1.0, M_hard=None, Delta_0=None, minLeaves=None, maxLeaves=None,
+                 suppress_output=False, obs_leaves=None, maxNTry=100, **kwargs):
+        super(SimulatorModel, self).__init__(**kwargs)
+
+        if control:
+            assert control in ('all', 'splittings'), "control must be set to one of None, 'all' or 'splittings'"
+            self.control = control
+
+        self.node_counter = 0
+        self.pt_cut = pt_cut
+        self.M_hard = M_hard
+        self.Delta_0 = Delta_0
+        self.minLeaves = minLeaves
+        self.maxLeaves = maxLeaves
+        self.jet_p = jet_p
+        self.suppress_output = suppress_output
+        self.obs = obs_leaves
+        self.NTry = 0
+        self.maxNTry=maxNTry
+        self.sinkhorn = SamplesLoss(loss="sinkhorn", p=1, blur=.05) # TO DO: CHECK THESE TUNING VALUES!
+
+
+    def __call__(self, inputs=None, **kwargs):
+        if inputs is not None:
+            return self.forward(inputs=inputs, **kwargs)
+        return self.forward(**kwargs)
+
+
+    def forward(self, inputs=None):
+
+        self.node_counter=0 # Reset for each run, else it accumulates results from failed tries.
+
+        if self.control == 'all':
+            assert (len(inputs)-2)%4==0, "when controlling all, input length must be a 2+4*n for integer n."
+        elif self.control == 'splittings':
+            assert inputs%2==0, "when controlling splittings, input length must be a multiple of 2"
+
+        
+        inputs = to_tensor(inputs)
+        root_rate = inputs[0]
+        decay_rate = inputs[1]
+
+        if self.suppress_output is False:
+            logger.info(f"Initial squared mass: {self.Delta_0}")
+
+        """Define pyro distributions as global variables"""
+
+        globals()["root_dist"] = pyprob.distributions.TruncatedExponential(root_rate, 0, 1)
+        globals()["decay_dist"] = pyprob.distributions.TruncatedExponential(decay_rate, 0, 1)
+
+
+        tree, content, deltas, draws, leaves = _traverse(self,
+            self.jet_p,
+            inputs[2:],
+            delta_P=self.Delta_0,
+            cut_off=self.pt_cut,
+            rate=decay_rate,
+            suppress_output=self.suppress_output
+        )
+
+        jet = dict()
+        jet["root_id"] = 0
+        jet["tree"] = to_tensor(tree).reshape(-1, 2)  # Labels for the nodes in the tree
+        jet["content"] = torch.stack(content)
+        jet["LambdaRoot"] = root_rate
+        jet["Lambda"] = decay_rate
+        jet["Delta_0"] = self.Delta_0
+        jet["pt_cut"] = self.pt_cut
+        jet["algorithm"] = "truth"
+        jet["deltas"] = to_tensor(deltas)
+        jet["draws"] = to_tensor(draws[1:])
+        jet["leaves"] = torch.stack(leaves)
+        if self.M_hard:
+            jet["M_Hard"] = float(self.M_hard)
+
+        # num_leaves_cts = pyprob.distributions.Normal(len(jet["leaves"]), 0.1)
+        # pyprob.observe(num_leaves_cts, name='num_leaves_cts')
+        # if self.minLeaves is not None:
+        #     delta_val = int(len(jet["leaves"]) >= self.minLeaves)
+        #     minLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(minLeaves_disc, name='min_leaves_disc')
+        # if self.maxLeaves is not None:
+        #     delta_val = int(len(jet["leaves"]) <= self.maxLeaves)
+        #     maxLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(maxLeaves_disc, name='max_leaves_disc')
+        # if self.minLeaves is not None and self.maxLeaves is not None:
+        #     delta_val = int(self.minLeaves <= len(jet["leaves"]) <= self.maxLeaves)
+        #     rangeLeaves_disc = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(rangeLeaves_disc, name='range_leaves_disc')
+        # if self.bernoulli_func is not None:
+        #     delta_val = int(self.bernoulli_func(self, jet))
+        #     bool_func_dist = pyprob.distributions.Bernoulli(delta_val)
+        #     pyprob.observe(bool_func_dist, name="bool_func")
+        # if self.obs_leaves is not None:
+        #     if torch.isnan(to_tensor(jet["leaves"])).any():
+        #         warn("nan detected in simulated leaves, returning distance of 1e6")
+        #         sinkhorn_dist = 1e6
+        #     else:
+        #         sinkhorn_dist = self.sinkhorn(self.obs_leaves, to_tensor(jet["leaves"]))
+        #     dummy = pyprob.distributions.Normal(sinkhorn_dist, 0.1)
+        #     pyprob.observe(dummy, sinkhorn_dist, name="distance")
+        if self.minLeaves <= len(jet["leaves"]) < self.maxLeaves:
+            self.NTry=0
+            return jet
+        elif self.NTry >= self.maxNTry:
+            print("Did not fall within valid leaf range in specified number of tries.")
+            self.NTry=0
+            return None
+        else:
+            print(len(jet["leaves"]))
+            self.NTry+=1
+            return self.forward(inputs)
+
+    @staticmethod
+    def save(jet_list, outdir, filename):
+        out_filename = os.path.join(outdir, filename + ".pkl")
+        with open(out_filename, "wb") as f:
+            pickle.dump(jet_list, f, protocol=2)
